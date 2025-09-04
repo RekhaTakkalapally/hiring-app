@@ -1,47 +1,58 @@
-pipeline {
-    agent any
-
-        environment {
-        IMAGE_TAG = "${BUILD_NUMBER}"
+node {
+    // --- Global Tools ---
+    def mvnHome = tool name: 'MVN_HOME', type: 'maven'
+    def scannerHome = tool name: 'sonar_scanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
+    // --- Environment Variables ---
+    env.NEXUS_VERSION = "nexus3"
+    env.NEXUS_PROTOCOL = "http"
+    env.NEXUS_URL = "3.83.214.6:8081"
+    env.NEXUS_REPOSITORY = "pipe-snapshots"
+    env.NEXUS_CREDENTIAL_ID = "Nexus-server"
+    env.SLACK_CHANNEL = "#jenkins-integration"
+    stage("Clone Code") {
+        git 'https://github.com/sunil-th/simplecutomerapp.git'
     }
-
-    stages {
-        
-       
-        stage('Docker Build') {
-            steps {
-                sh "docker build . -t sabair0509/hiring-app:$BUILD_NUMBER"
+    stage("Maven Build") {
+        sh "${mvnHome}/bin/mvn -Dmaven.test.failure.ignore=true clean install"
+    }
+    stage("SonarQube Analysis") {
+        withSonarQubeEnv('sonarqube-server') {
+            sh """
+                ${scannerHome}/bin/sonar-scanner \
+                  -Dsonar.projectKey=Ncodeit \
+                  -Dsonar.projectName=Ncodeit \
+                  -Dsonar.projectVersion=2.0 \
+                  -Dsonar.sources=${WORKSPACE}/src/ \
+                  -Dsonar.binaries=target/classes/com/visualpathit/account/controller/ \
+                  -Dsonar.junit.reportsPath=target/surefire-reports \
+                  -Dsonar.jacoco.reportPath=target/jacoco.exec \
+                  -Dsonar.java.binaries=src/com/room/sample
+            """
+        }
+    }
+    stage("Publish to Nexus") {
+        script {
+            def pom = readMavenPom file: "pom.xml"
+            def filesByGlob = findFiles(glob: "target/*.${pom.packaging}")
+            echo "Artifact: ${filesByGlob[0].name} at ${filesByGlob[0].path}"
+            def artifactPath = filesByGlob[0].path
+            def artifactExists = fileExists artifactPath
+            if (artifactExists) {
+                nexusArtifactUploader(
+                    nexusVersion: env.NEXUS_VERSION,
+                    protocol: env.NEXUS_PROTOCOL,
+                    nexusUrl: env.NEXUS_URL,
+                    groupId: pom.groupId,
+                    version: pom.version,
+                    repository: env.NEXUS_REPOSITORY,
+                    credentialsId: env.NEXUS_CREDENTIAL_ID,
+                    artifacts: [
+                        [artifactId: pom.artifactId, classifier: '', file: artifactPath, type: pom.packaging],
+                        [artifactId: pom.artifactId, classifier: '', file: "pom.xml", type: "pom"]
+                    ]
+                )
+            } else {
+                error "*** File: ${artifactPath}, could not be found"
             }
         }
-        stage('Docker Push') {
-            steps {
-                withCredentials([string(credentialsId: 'docker-hub', variable: 'hubPwd')]) {
-                    sh "docker login -u sabair0509 -p ${hubPwd}"
-                    sh "docker push sabair0509/hiring-app:$BUILD_NUMBER"
-                }
-            }
-        }
-        stage('Checkout K8S manifest SCM'){
-            steps {
-              git branch: 'main', url: 'https://github.com/betawins/Hiring-app-argocd.git'
-            }
-        } 
-        stage('Update K8S manifest & push to Repo'){
-            steps {
-                script{
-                   withCredentials([usernamePassword(credentialsId: 'Github_server', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) { 
-                        sh '''
-                        cat /var/lib/jenkins/workspace/$JOB_NAME/dev/deployment.yaml
-                        sed -i "s/5/${BUILD_NUMBER}/g" /var/lib/jenkins/workspace/$JOB_NAME/dev/deployment.yaml
-                        cat /var/lib/jenkins/workspace/$JOB_NAME/dev/deployment.yaml
-                        git add .
-                        git commit -m 'Updated the deploy yaml | Jenkins Pipeline'
-                        git remote -v
-                        git push https://$GIT_USERNAME:$GIT_PASSWORD@github.com/betawins/Hiring-app-argocd.git main
-                        '''                        
-                      }
-                  }
-            }   
-        }
-            }
-} 
+    }
