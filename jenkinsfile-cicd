@@ -1,22 +1,21 @@
 node {
     // --- Global Tools ---
-    def mvnHome = tool name: 'MVN_HOME', type: 'maven'
-    def scannerHome = tool name: 'sonar_scanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
+    def mvnHome = tool name: 'maven', type: 'maven'
+    def scannerHome = tool name: 'sonar-scanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
     // --- Environment Variables ---
     env.NEXUS_VERSION = "nexus3"
     env.NEXUS_PROTOCOL = "http"
-    env.NEXUS_URL = "3.83.214.6:8081"
-    env.NEXUS_REPOSITORY = "pipe-snapshots"
-    env.NEXUS_CREDENTIAL_ID = "Nexus-server"
-    env.SLACK_CHANNEL = "#jenkins-integration"
+    env.NEXUS_URL = "54.175.175.94:8081"
+    env.NEXUS_REPOSITORY = "rachana-snapshot"
+    env.NEXUS_CREDENTIAL_ID = "nexus"
     stage("Clone Code") {
-        git 'https://github.com/sunil-th/simplecutomerapp.git'
+        git 'https://github.com/RekhaTakkalapally/hiring-app.git'
     }
     stage("Maven Build") {
         sh "${mvnHome}/bin/mvn -Dmaven.test.failure.ignore=true clean install"
     }
     stage("SonarQube Analysis") {
-        withSonarQubeEnv('sonarqube-server') {
+        withSonarQubeEnv('sonar-server') {
             sh """
                 ${scannerHome}/bin/sonar-scanner \
                   -Dsonar.projectKey=Ncodeit \
