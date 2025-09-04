@@ -1,56 +1,58 @@
-pipeline{
-    agent any
-    tools{
-        maven 'maven-3.9'
+node {
+    // --- Global Tools ---
+    def mvnHome = tool name: 'MVN_HOME', type: 'maven'
+    def scannerHome = tool name: 'sonar_scanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
+    // --- Environment Variables ---
+    env.NEXUS_VERSION = "nexus3"
+    env.NEXUS_PROTOCOL = "http"
+    env.NEXUS_URL = "3.83.214.6:8081"
+    env.NEXUS_REPOSITORY = "pipe-snapshots"
+    env.NEXUS_CREDENTIAL_ID = "Nexus-server"
+    env.SLACK_CHANNEL = "#jenkins-integration"
+    stage("Clone Code") {
+        git 'https://github.com/sunil-th/simplecutomerapp.git'
     }
-    stages{
-        stage('checkout the code'){
-            steps{
-                git url:'https://github.com/bcreddydevops/chinna-app.git', branch: 'main'
+    stage("Maven Build") {
+        sh "${mvnHome}/bin/mvn -Dmaven.test.failure.ignore=true clean install"
+    }
+    stage("SonarQube Analysis") {
+        withSonarQubeEnv('sonarqube-server') {
+            sh """
+                ${scannerHome}/bin/sonar-scanner \
+                  -Dsonar.projectKey=Ncodeit \
+                  -Dsonar.projectName=Ncodeit \
+                  -Dsonar.projectVersion=2.0 \
+                  -Dsonar.sources=${WORKSPACE}/src/ \
+                  -Dsonar.binaries=target/classes/com/visualpathit/account/controller/ \
+                  -Dsonar.junit.reportsPath=target/surefire-reports \
+                  -Dsonar.jacoco.reportPath=target/jacoco.exec \
+                  -Dsonar.java.binaries=src/com/room/sample
+            """
+        }
+    }
+    stage("Publish to Nexus") {
+        script {
+            def pom = readMavenPom file: "pom.xml"
+            def filesByGlob = findFiles(glob: "target/*.${pom.packaging}")
+            echo "Artifact: ${filesByGlob[0].name} at ${filesByGlob[0].path}"
+            def artifactPath = filesByGlob[0].path
+            def artifactExists = fileExists artifactPath
+            if (artifactExists) {
+                nexusArtifactUploader(
+                    nexusVersion: env.NEXUS_VERSION,
+                    protocol: env.NEXUS_PROTOCOL,
+                    nexusUrl: env.NEXUS_URL,
+                    groupId: pom.groupId,
+                    version: pom.version,
+                    repository: env.NEXUS_REPOSITORY,
+                    credentialsId: env.NEXUS_CREDENTIAL_ID,
+                    artifacts: [
+                        [artifactId: pom.artifactId, classifier: '', file: artifactPath, type: pom.packaging],
+                        [artifactId: pom.artifactId, classifier: '', file: "pom.xml", type: "pom"]
+                    ]
+                )
+            } else {
+                error "*** File: ${artifactPath}, could not be found"
             }
         }
-        stage('build the code'){
-            steps{
-                sh 'mvn clean package'
-            }
-        }
-        stage('Generate sonarqube-analysis'){
-            steps{
-                withSonarQubeEnv(installationName: 'sonarqube-8', credentialsId: 'jenkins-sonar-token') {
-                 sh 'mvn sonar:sonar'
-                }
-            }
-        }
-        stage('Upload War file to Nexus'){
-            steps{
-             nexusArtifactUploader artifacts: [
-                 [
-                     artifactId: 'devops', 
-                     classifier: '', 
-                     file: 'target/hiring.war', 
-                     type: 'war'
-                ]
-            ], 
-            credentialsId: 'nexus-credentials', 
-            groupId: 'in.javahome', 
-            nexusUrl: '52.90.34.45:8081', 
-            nexusVersion: 'nexus3', 
-            protocol: 'http', 
-            repository: 'spring-initial', 
-            version: '0.0.1'
-            }
-        }
-		stage('Deploy War file to Tommcat'){
-            steps{
-               sshagent(['tomcat-credentials']) {
-                  sh """
-                    scp -o StrictHostKeyChecking=no target/*.war ubuntu@54.173.252.57:/opt/apache-tomcat-9.0.72/webapps
-                    ssh -o StrictHostKeyChecking=no ubuntu@54.173.252.57 /opt/apache-tomcat-9.0.72/bin/shutdown.sh
-                    ssh -o StrictHostKeyChecking=no ubuntu@54.173.252.57 /opt/apache-tomcat-9.0.72/bin/startup.sh
-					
-		          """          
-               }
-            }
-        }
-    }   
- }
+    }
